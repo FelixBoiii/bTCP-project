@@ -50,6 +50,7 @@ class BTCPClientSocket(BTCPSocket):
         # thread into the network thread. Bounded in size.
         self._sendbuf = queue.Queue(maxsize=1000)
         self._lossy_layer.start_network_thread()
+        self._handshakeQueue = queue.Queue()
 
         logger.info("Socket initialized with sendbuf size 1000")
 
@@ -199,9 +200,25 @@ class BTCPClientSocket(BTCPSocket):
         We do not think you will need more advanced thread synchronization in
         this project.
         """
-        self._state = BTCPStates.ESTABLISHED
-        #logger.debug("connect called")
-        #raise_NotImplementedError("No implementation of connect present. Read the comments & code of client_socket.py.")
+        header = self.build_segment_header(self._seqnum, 0, True)
+        emptyPart = b'\x00' * PAYLOAD_SIZE
+        checkSegment = header + emptyPart
+        checksum = self.in_cksum(checkSegment)
+        
+        header = self.build_segment_header(self._seqnum, 0, True, checksum=checksum)
+        syn_segment = header + emptyPart
+        
+        self._lossy_layer.send_segment(syn_segment)
+        self._state = BTCPStates.SYN_SENT
+        
+        while self._state != BTCPStates.ESTABLISHED:
+            #self.build_segment_header(self._seqnum, 0, True)
+            #self._seqnum = (self._seqnum + 1) % 65536
+            self._state = BTCPStates.SYN_SENT
+            
+            #time.sleep(0.05)
+        logger.debug("connect called")
+        raise_NotImplementedError("No implementation of connect present. Read the comments & code of client_socket.py.")
 
 
     def send(self, data):

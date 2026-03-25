@@ -116,23 +116,25 @@ class BTCPServerSocket(BTCPSocket):
         smaller helper functions, that you can combine as needed into a larger
         function for each state.
         """
-        #later de basisdingen hier van tevoren implementeren, zitten nu nog los in alle helper functies.
-
-
         logger.debug("lossy_layer_segment_received called")
-        logger.debug(segment)
-        #raise_NotImplementedError("Only rudimentary implementation of lossy_layer_segment_received present. Read the comments & code of server_socket.py, then remove the NotImplementedError.")
+        logger.debug(segment)    
+           
+        seqnum, acknum, flag_byte, window, length, checksum = self.unpack_segment_header(segment[:HEADER_SIZE])
+        chunk = segment[HEADER_SIZE:HEADER_SIZE + length]
 
-        match self._state:
-            case BTCPStates.CLOSED:
-                self._closed_segment_received(segment)
-            case BTCPStates.CLOSING:
-                self._closing_segment_received(segment)
-            case BTCPStates.ESTABLISHED:
-                self._established_segment_received(segment)
-            case _:
-                self._other_segment_received(segment)
-
+        if self.verify_checksum:
+            match self._state:
+                case BTCPStates.CLOSED:
+                    self._closed_segment_received(segment)
+                case BTCPStates.CLOSING:
+                    self._closing_segment_received(segment)
+                case BTCPStates.ESTABLISHED:
+                    self._established_segment_received(segment)
+                case _:
+                    self._other_segment_received(segment)
+        else:
+            logger.debug("Wrong checksum")
+        
         self._expire_timers()
         return
 

@@ -38,6 +38,7 @@ class BTCPSignals(IntEnum):
     you could put one of these in a variable that the network thread reads the
     next time it ticks, and handles the state change in the network thread.
     """
+    NOTHING = 0
     ACCEPT = 1
     CONNECT = 2
     SHUTDOWN = 3
@@ -52,6 +53,7 @@ class BTCPSocket:
         self._window = window
         self._timeout_secs = timeout
         self._state = BTCPStates.CLOSED
+        self._signal = BTCPSignals.NOTHING
 
         if isn==None:
             isn = random.randint(0,0xffff)
@@ -76,7 +78,7 @@ class BTCPSocket:
 
         
         Our bTCP implementation always has an even number of bytes in a segment.
-
+        
         Remember that, when computing the checksum value before *sending* the
         segment, the checksum field in the header should be set to 0x0000, and
         then the resulting checksum should be put in its place.
@@ -93,8 +95,6 @@ class BTCPSocket:
         checksum = ~checksum & 0xFFFF
 
         return checksum   
-        logger.debug("in_cksum() called")
-        raise_NotImplementedError("No implementation of in_cksum present. Read the comments & code of btcp_socket.py.")
 
 
     @staticmethod
@@ -104,9 +104,6 @@ class BTCPSocket:
         Mind that you change *what* signals that to the correct value(s),
         that is, be sure to change the "0xABCD" below.
         """
-        
-        #logger.debug("verify_cksum() called")
-        #raise_NotImplementedError("No implementation of in_cksum present. Read the comments & code of btcp_socket.py.")
         
         return BTCPSocket.in_cksum(segment) == 0x0000
 
