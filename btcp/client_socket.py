@@ -100,14 +100,31 @@ class BTCPClientSocket(BTCPSocket):
         smaller helper functions, that you can combine as needed into a larger
         function for each state.
         """
-        if(len(segment) != SEGMENT_SIZE):
-            logger.debug("not the right length")
-        header = segment[:10]
-        seqnum, acknum, flag_byte, window, length, checksum = self.unpack_segment_header(header)
-
         logger.debug("lossy_layer_segment_received called")
-        raise_NotImplementedError("No implementation of lossy_layer_segment_received present. Read the comments & code of client_socket.py.")
+        logger.debug(segment)    
+        if(len(segment) != SEGMENT_SIZE):
+            logger.debug("not the right length")   
+        seqnum, acknum, flag_byte, window, length, checksum = self.unpack_segment_header(segment[:HEADER_SIZE])
+        chunk = segment[HEADER_SIZE:HEADER_SIZE + length]
 
+        if self.verify_checksum(segment):
+            match self._state:
+                case BTCPStates.SYN_SENT:
+                    if (flag_byte >> 1) & 1:
+                        self._state = BTCPStates.ESTABLISHED
+                case BTCPStates.CLOSED:
+                    self._closed_segment_received(segment)
+                case BTCPStates.CLOSING:
+                    self._closing_segment_received(segment)
+                case BTCPStates.ESTABLISHED:
+                    self._established_segment_received(segment)
+                case _:
+                    self._other_segment_received(segment)
+        else:
+            logger.debug("Wrong checksum")
+        
+        self._expire_timers()
+        return
 
     def lossy_layer_tick(self):
         """Called by the lossy layer whenever no segment has arrived for
@@ -212,13 +229,9 @@ class BTCPClientSocket(BTCPSocket):
         self._state = BTCPStates.SYN_SENT
         
         while self._state != BTCPStates.ESTABLISHED:
-            #self.build_segment_header(self._seqnum, 0, True)
-            #self._seqnum = (self._seqnum + 1) % 65536
-            self._state = BTCPStates.SYN_SENT
-            
-            #time.sleep(0.05)
-        logger.debug("connect called")
-        raise_NotImplementedError("No implementation of connect present. Read the comments & code of client_socket.py.")
+            time.sleep(0.05)
+        #logger.debug("connect called")
+        #raise_NotImplementedError("No implementation of connect present. Read the comments & code of client_socket.py.")
 
 
     def send(self, data):

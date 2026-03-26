@@ -51,6 +51,7 @@ class BTCPServerSocket(BTCPSocket):
         super().__init__(window, timeout, isn)
         self._lossy_layer = LossyLayer(self, SERVER_IP, SERVER_PORT, CLIENT_IP, CLIENT_PORT)
 
+        self.clientISN = None
         # The data buffer used by lossy_layer_segment_received to move data
         # from the network thread into the application thread. Bounded in size.
         # If data overflows the buffer it will get lost -- that's what window
@@ -118,12 +119,18 @@ class BTCPServerSocket(BTCPSocket):
         """
         logger.debug("lossy_layer_segment_received called")
         logger.debug(segment)    
-           
+        if(len(segment) != SEGMENT_SIZE):
+            logger.debug("not the right length")   
         seqnum, acknum, flag_byte, window, length, checksum = self.unpack_segment_header(segment[:HEADER_SIZE])
         chunk = segment[HEADER_SIZE:HEADER_SIZE + length]
 
-        if self.verify_checksum:
+        if self.verify_checksum(segment):
             match self._state:
+                case BTCPStates.ACCEPTING:
+                    self._accepting_segment_received(segment, seqnum, flag_byte, chunk)
+                case BTCPStates.SYN_RCVD:
+                    if (flag_byte >> 1) & 1:
+                        self._state = BTCPStates.ESTABLISHED
                 case BTCPStates.CLOSED:
                     self._closed_segment_received(segment)
                 case BTCPStates.CLOSING:
@@ -137,9 +144,28 @@ class BTCPServerSocket(BTCPSocket):
         
         self._expire_timers()
         return
+    
+    def _accepting_segment_received(self, segment, seqnum, flag_byte, chunk):
+        logger.debug("_accepting_segment_received called")
+        if bool((flag_byte >> 2) & 1):
+            self.clientISN = seqnum
+            
+            checkHeader = BTCPSocket.build_segment_header(self._seqnum, self.clientISN + 1, True, True)
+            checkMessage = checkHeader + b'\x00' * PAYLOAD_SIZE
+            
+            checksum = self.in_cksum(checkMessage)
+            header = BTCPSocket.build_segment_header(self._seqnum, self.clientISN + 1, True, True, checksum=checksum)
+            synSegment = header + b'\x00' * PAYLOAD_SIZE
+            
+            self._lossy_layer.send_segment(synSegment)
+            
+            logger.debug("syn-ack send. state = SYN_RCVD")
+            self._state = BTCPStates.SYN_RCVD
+            
+            
+        
 
-
-    def _closed_segment_received(self, segment):
+    def _closed_segment_received(self, segment, flag_byte, chunk):
         """Helper method handling received segment in CLOSED state
         """
         logger.debug("_closed_segment_received called")
@@ -150,11 +176,13 @@ class BTCPServerSocket(BTCPSocket):
         # Get length from header. Change this to a proper segment header unpack
         # after implementing BTCPSocket.unpack_segment_header in btcp_socket.py
         #datalen, = struct.unpack("!H", segment[6:8])
-        datalen = self.unpack_segment_header(segment[:HEADER_SIZE])[4]
+        #datalen = self.unpack_segment_header(segment[:HEADER_SIZE])[4]
         # Slice data from incoming segment.
-        chunk = segment[HEADER_SIZE:HEADER_SIZE + datalen]
+        #chunk = segment[HEADER_SIZE:HEADER_SIZE + datalen]
         # Pass data into receive buffer so that the application thread can
         # retrieve it.
+        
+        
         try:
             self._recvbuf.put_nowait(chunk)
         except queue.Full:
@@ -287,7 +315,9 @@ class BTCPServerSocket(BTCPSocket):
         We do not think you will need more advanced thread synchronization in
         this project.
         """
-        self._state = BTCPStates.ESTABLISHED
+        self._state = BTCPStates.ACCEPTING
+        while self._state != BTCPStates.ESTABLISHED:
+            time.sleep(0.05)
         #logger.debug("accept called")
         #raise_NotImplementedError("No implementation of accept present. Read the comments & code of server_socket.py.")
 
