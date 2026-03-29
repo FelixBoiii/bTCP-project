@@ -147,9 +147,7 @@ class BTCPSocket:
         than make a separate method for every individual field.
         """
         return seqnum, acknum, flag_byte, window, length, checksum
-        logger.debug("unpack_segment_header() called")
-        raise_NotImplementedError("No implementation of unpack_segment_header present. Read the comments & code of btcp_socket.py. You should really implement the packing / unpacking of the header into field values before doing anything else!")
-        logger.debug("unpack_segment_header() done")
+
 
 
 

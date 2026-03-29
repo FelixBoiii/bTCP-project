@@ -118,29 +118,33 @@ class BTCPServerSocket(BTCPSocket):
         function for each state.
         """
         logger.debug("lossy_layer_segment_received called")
-        logger.debug(segment)    
+        logger.debug(segment)
+          
         if(len(segment) != SEGMENT_SIZE):
-            logger.debug("not the right length")   
+            logger.debug("not the right length")
+            return
+        
         seqnum, acknum, flag_byte, window, length, checksum = self.unpack_segment_header(segment[:HEADER_SIZE])
         chunk = segment[HEADER_SIZE:HEADER_SIZE + length]
 
-        if self.verify_checksum(segment):
-            match self._state:
-                case BTCPStates.ACCEPTING:
-                    self._accepting_segment_received(segment, seqnum, flag_byte, chunk)
-                case BTCPStates.SYN_RCVD:
-                    if (flag_byte >> 1) & 1:
-                        self._state = BTCPStates.ESTABLISHED
-                case BTCPStates.CLOSED:
-                    self._closed_segment_received(segment)
-                case BTCPStates.CLOSING:
-                    self._closing_segment_received(segment)
-                case BTCPStates.ESTABLISHED:
-                    self._established_segment_received(segment)
-                case _:
-                    self._other_segment_received(segment)
-        else:
-            logger.debug("Wrong checksum")
+        if not self.verify_checksum(segment):
+            logger.warning("Checksum verification failed")
+            self._expire_timers()
+            return
+        
+        match self._state:
+            case BTCPStates.ACCEPTING:
+                self._accepting_segment_received(segment, seqnum, flag_byte, chunk)
+            case BTCPStates.SYN_RCVD:
+                self._syn_rcvd_segment_received(segment, seqnum, flag_byte, chunk, acknum)
+            case BTCPStates.CLOSED:
+                self._closed_segment_received(segment)
+            case BTCPStates.CLOSING:
+                self._closing_segment_received(segment)
+            case BTCPStates.ESTABLISHED:
+                self._established_segment_received(segment)
+            case _:
+                logger.warning(f"Unexpected state: {self._state}")
         
         self._expire_timers()
         return
@@ -149,20 +153,39 @@ class BTCPServerSocket(BTCPSocket):
         logger.debug("_accepting_segment_received called")
         if bool((flag_byte >> 2) & 1):
             self.clientISN = seqnum
+            self._client_seqnum = seqnum
+
             
-            checkHeader = BTCPSocket.build_segment_header(self._seqnum, self.clientISN + 1, True, True)
+            checkHeader = BTCPSocket.build_segment_header(self._seqnum, self.clientISN + 1, syn_set=True, ack_set=True)
             checkMessage = checkHeader + b'\x00' * PAYLOAD_SIZE
             
             checksum = self.in_cksum(checkMessage)
-            header = BTCPSocket.build_segment_header(self._seqnum, self.clientISN + 1, True, True, checksum=checksum)
+            header = BTCPSocket.build_segment_header(self._seqnum, self.clientISN + 1, syn_set=True, ack_set=True, checksum=checksum)
             synSegment = header + b'\x00' * PAYLOAD_SIZE
             
             self._lossy_layer.send_segment(synSegment)
             
-            logger.debug("syn-ack send. state = SYN_RCVD")
+            logger.debug("SYN-ACK sent, transitioning to SYN_RCVD state")
             self._state = BTCPStates.SYN_RCVD
+        else:
+            logger.warning("Not a SYN segment, ignoring")
             
-            
+        
+    def _syn_rcvd_segment_received(self, segment, seqnum, flag_byte, chunk, acknum):
+        logger.debug("_syn_rcvd_segment_received called")
+    
+        ack_flag = (flag_byte >> 1) & 1
+
+        if ack_flag and acknum == self._seqnum + 1:
+            logger.debug("ACK received with correct sequence number")
+            logger.debug("Handshake complete, transitioning to ESTABLISHED")
+        
+            self._state = BTCPStates.ESTABLISHED
+            self._client_seqnum = seqnum + len(chunk)
+        
+        else:
+            logger.warning(f"Invalid ACK in SYN_RCVD: ack_flag={ack_flag}, acknum={acknum}, expected={self._seqnum + 1}")
+    
         
 
     def _closed_segment_received(self, segment, flag_byte, chunk):

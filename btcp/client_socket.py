@@ -110,21 +110,44 @@ class BTCPClientSocket(BTCPSocket):
         if self.verify_checksum(segment):
             match self._state:
                 case BTCPStates.SYN_SENT:
-                    if (flag_byte >> 1) & 1:
-                        self._state = BTCPStates.ESTABLISHED
+                    self._syn_send_segment_received(flag_byte, seqnum)
                 case BTCPStates.CLOSED:
                     self._closed_segment_received(segment)
-                case BTCPStates.CLOSING:
-                    self._closing_segment_received(segment)
+                case BTCPStates.FIN_SENT:
+                    self._fin_sent_segment_received(segment, flag_byte)
                 case BTCPStates.ESTABLISHED:
                     self._established_segment_received(segment)
                 case _:
-                    self._other_segment_received(segment)
+                    logger.warning(f"Unexpected state: {self._state}")
         else:
             logger.debug("Wrong checksum")
+    
+    def _syn_send_segment_received(self, flag_byte, server_seqnum):
+        logger.debug("_syn_send_segment_received called")
         
-        self._expire_timers()
-        return
+        if (flag_byte >> 1) & 1:
+            logger.debug("syn_sent btcpstate = established for client")
+            header = self.build_segment_header(self._seqnum + 1, server_seqnum + 1, ack_set=True)
+            emptyPart = b'\x00' * PAYLOAD_SIZE
+            checkSegment = header + emptyPart
+            checksum = self.in_cksum(checkSegment)
+        
+            header = self.build_segment_header(self._seqnum + 1, server_seqnum + 1, ack_set=True, checksum=checksum)
+            syn_segment = header + emptyPart
+        
+            self._lossy_layer.send_segment(syn_segment)
+            self._state = BTCPStates.ESTABLISHED
+        else:
+            logger.warning("Expected SYN-ACK segment, but SYN flag not set")
+
+    def _fin_sent_segment_received(self, segment, flag_byte):
+        logger.debug("_fin_sent_segment_received called")
+        
+        if (flag_byte >> 1) & 1 and flag_byte & 1:
+            logger.debug("fin_sent btcpstate = closed for client")
+            self._state = BTCPStates.CLOSED
+        else:
+            logger.warning("Expected FIN-ACK segment, but ACK flag not set")
 
     def lossy_layer_tick(self):
         """Called by the lossy layer whenever no segment has arrived for
@@ -169,8 +192,16 @@ class BTCPClientSocket(BTCPSocket):
                     logger.debug("Padding chunk to full size")
                     chunk = chunk + b'\x00' * (PAYLOAD_SIZE - datalen)
                 logger.debug("Building segment from chunk.")
-                segment = (self.build_segment_header(self._seqnum, 0, length=datalen)
-                           + chunk)
+                ## moet nog checken
+                
+                temp_header = self.build_segment_header(self._seqnum, 0, length=datalen)
+                check_segment = temp_header + chunk
+                checksum = self.in_cksum(check_segment)
+                
+                segment = (self.build_segment_header(self._seqnum, 0, length=datalen, checksum=checksum) + chunk)
+                
+                ##
+                #segment = (self.build_segment_header(self._seqnum, 0, length=datalen)+ chunk)
                 logger.info("Sending segment.")
                 self._lossy_layer.send_segment(segment)
         except queue.Empty:
