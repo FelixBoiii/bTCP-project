@@ -136,18 +136,29 @@ class BTCPServerSocket(BTCPSocket):
             case BTCPStates.ACCEPTING:
                 self._accepting_segment_received(segment, seqnum, flag_byte, chunk)
             case BTCPStates.SYN_RCVD:
-                self._syn_rcvd_segment_received(segment, seqnum, flag_byte, chunk, acknum)
+                self._syn_rcvd_segment_received(segment, seqnum, flag_byte, chunk, acknum, length)
             case BTCPStates.CLOSED:
                 self._closed_segment_received(segment)
             case BTCPStates.CLOSING:
                 self._closing_segment_received(segment)
             case BTCPStates.ESTABLISHED:
-                self._established_segment_received(segment)
+                self._established_segment_received(segment, seqnum, flag_byte, length, chunk, acknum)
             case _:
                 logger.warning(f"Unexpected state: {self._state}")
         
         self._expire_timers()
         return
+    
+    def _send_empty_ack(self, seqnum, acknum=0, syn_set=False, ack_set=False, fin_set=False):
+        
+        checkHeader = BTCPSocket.build_segment_header(seqnum, acknum, syn_set=syn_set, ack_set=ack_set, fin_set=fin_set, window=self._window - self._recvbuf.qsize())
+        checkMessage = checkHeader + b'\x00' * PAYLOAD_SIZE
+            
+        checksum = self.in_cksum(checkMessage)
+        header = BTCPSocket.build_segment_header(seqnum, acknum , syn_set=syn_set, ack_set=ack_set, fin_set=fin_set, checksum=checksum, window=self._window - self._recvbuf.qsize())
+        synSegment = header + b'\x00' * PAYLOAD_SIZE
+            
+        self._lossy_layer.send_segment(synSegment)
     
     def _accepting_segment_received(self, segment, seqnum, flag_byte, chunk):
         logger.debug("_accepting_segment_received called")
@@ -155,15 +166,7 @@ class BTCPServerSocket(BTCPSocket):
             self.clientISN = seqnum
             self._client_seqnum = seqnum
 
-            
-            checkHeader = BTCPSocket.build_segment_header(self._seqnum, self.clientISN + 1, syn_set=True, ack_set=True)
-            checkMessage = checkHeader + b'\x00' * PAYLOAD_SIZE
-            
-            checksum = self.in_cksum(checkMessage)
-            header = BTCPSocket.build_segment_header(self._seqnum, self.clientISN + 1, syn_set=True, ack_set=True, checksum=checksum)
-            synSegment = header + b'\x00' * PAYLOAD_SIZE
-            
-            self._lossy_layer.send_segment(synSegment)
+            self._send_empty_ack(self._seqnum, self.clientISN + 1, syn_set=True, ack_set=True)
             
             logger.debug("SYN-ACK sent, transitioning to SYN_RCVD state")
             self._state = BTCPStates.SYN_RCVD
@@ -171,7 +174,7 @@ class BTCPServerSocket(BTCPSocket):
             logger.warning("Not a SYN segment, ignoring")
             
         
-    def _syn_rcvd_segment_received(self, segment, seqnum, flag_byte, chunk, acknum):
+    def _syn_rcvd_segment_received(self, segment, seqnum, flag_byte, chunk, acknum, length):
         logger.debug("_syn_rcvd_segment_received called")
     
         ack_flag = (flag_byte >> 1) & 1
@@ -181,7 +184,7 @@ class BTCPServerSocket(BTCPSocket):
             logger.debug("Handshake complete, transitioning to ESTABLISHED")
         
             self._state = BTCPStates.ESTABLISHED
-            self._client_seqnum = seqnum + len(chunk)
+            self._client_seqnum = seqnum
         
         else:
             logger.warning(f"Invalid ACK in SYN_RCVD: ack_flag={ack_flag}, acknum={acknum}, expected={self._seqnum + 1}")
@@ -231,7 +234,7 @@ class BTCPServerSocket(BTCPSocket):
         
 
 
-    def _established_segment_received(self, segment):
+    def _established_segment_received(self, segment, seqnum, flag_byte, length, chunk, acknum):
         """Helper method handling received segment in any other state
 
         Currently solely for demonstration purposes.
@@ -239,14 +242,23 @@ class BTCPServerSocket(BTCPSocket):
         logger.debug("_established_segment_received called")
         logger.info("Segment received in %s state",
                     self._state)
-        datalen = self.unpack_segment_header(segment[:HEADER_SIZE])[4]
-        chunk = segment[HEADER_SIZE:HEADER_SIZE + datalen]
-        try:
-            self._recvbuf.put_nowait(chunk)
-        except queue.Full:
-            logger.critical("Data got dropped!")
-            logger.debug(chunk)
         
+        if seqnum < self._client_seqnum:
+            logger.debug("old segment recieved")
+            self._send_empty_ack(self._seqnum, seqnum - 1, ack_set=True)
+            return
+        elif seqnum == self._client_seqnum:
+            try:
+                self._recvbuf.put_nowait(chunk)
+            except queue.Full:
+                logger.critical("Data got dropped!")
+                logger.debug(chunk)
+            
+            self._client_seqnum = seqnum + 1
+
+            self._send_empty_ack(self._seqnum, seqnum, ack_set=True)
+        else:
+            logger.warning("wrong sequence number")     
 
 
     def lossy_layer_tick(self):

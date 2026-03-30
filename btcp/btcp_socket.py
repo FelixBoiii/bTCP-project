@@ -59,9 +59,6 @@ class BTCPSocket:
             isn = random.randint(0,0xffff)
         self._seqnum = isn
 
-        #raise_NotImplementedError("Check btcp_socket.py's BTCPStates enum. We left out some states you will need.")
-        #logger.debug("Socket initialized with window %i and timeout %i secs and isn %i", self._window, self._timeout_secs, isn)
-
     @property
     def timeout_secs(self):
         return self._timeout_secs

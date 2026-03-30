@@ -50,7 +50,9 @@ class BTCPClientSocket(BTCPSocket):
         # thread into the network thread. Bounded in size.
         self._sendbuf = queue.Queue(maxsize=1000)
         self._lossy_layer.start_network_thread()
-        self._handshakeQueue = queue.Queue()
+        #self._handshakeQueue = queue.Queue()
+        self._send_packets = []
+        self._server_window = 0x01
 
         logger.info("Socket initialized with sendbuf size 1000")
 
@@ -110,29 +112,30 @@ class BTCPClientSocket(BTCPSocket):
         if self.verify_checksum(segment):
             match self._state:
                 case BTCPStates.SYN_SENT:
-                    self._syn_send_segment_received(flag_byte, seqnum)
+                    self._syn_send_segment_received(flag_byte, seqnum, window)
                 case BTCPStates.CLOSED:
                     self._closed_segment_received(segment)
                 case BTCPStates.FIN_SENT:
                     self._fin_sent_segment_received(segment, flag_byte)
                 case BTCPStates.ESTABLISHED:
-                    self._established_segment_received(segment)
+                    self._established_segment_received(segment, flag_byte)
                 case _:
                     logger.warning(f"Unexpected state: {self._state}")
         else:
             logger.debug("Wrong checksum")
     
-    def _syn_send_segment_received(self, flag_byte, server_seqnum):
+    def _syn_send_segment_received(self, flag_byte, server_seqnum, window):
         logger.debug("_syn_send_segment_received called")
         
         if (flag_byte >> 1) & 1:
             logger.debug("syn_sent btcpstate = established for client")
-            header = self.build_segment_header(self._seqnum + 1, server_seqnum + 1, ack_set=True)
+            self._server_window = window
+            header = self.build_segment_header(self._seqnum, server_seqnum + 1, ack_set=True)
             emptyPart = b'\x00' * PAYLOAD_SIZE
             checkSegment = header + emptyPart
             checksum = self.in_cksum(checkSegment)
         
-            header = self.build_segment_header(self._seqnum + 1, server_seqnum + 1, ack_set=True, checksum=checksum)
+            header = self.build_segment_header(self._seqnum, server_seqnum + 1, ack_set=True, checksum=checksum)
             syn_segment = header + emptyPart
         
             self._lossy_layer.send_segment(syn_segment)
@@ -140,7 +143,7 @@ class BTCPClientSocket(BTCPSocket):
         else:
             logger.warning("Expected SYN-ACK segment, but SYN flag not set")
 
-    def _fin_sent_segment_received(self, segment, flag_byte):
+    def _fin_sent_segment_received(self, segment, flag_byte, acknum):
         logger.debug("_fin_sent_segment_received called")
         
         if (flag_byte >> 1) & 1 and flag_byte & 1:
@@ -148,6 +151,12 @@ class BTCPClientSocket(BTCPSocket):
             self._state = BTCPStates.CLOSED
         else:
             logger.warning("Expected FIN-ACK segment, but ACK flag not set")
+
+    def _established_segment_received(self, segment, flag_byte):
+        logger.debug("_established_segment_received called")
+        if (flag_byte >> 1) & 1:
+            logger.debug(f"Recieved ack from server")
+        
 
     def lossy_layer_tick(self):
         """Called by the lossy layer whenever no segment has arrived for
@@ -182,6 +191,7 @@ class BTCPClientSocket(BTCPSocket):
         # You should eventually for flow cotrol  be checking whether there's space in the window as well,
         # for reliable data transfer be storing the segments for retransmission somewhere.
         try:
+            #TODO: add windowsize instead of constant 
             while True:
                 logger.debug("Getting chunk from buffer.")
                 chunk = self._sendbuf.get_nowait()
@@ -192,18 +202,18 @@ class BTCPClientSocket(BTCPSocket):
                     logger.debug("Padding chunk to full size")
                     chunk = chunk + b'\x00' * (PAYLOAD_SIZE - datalen)
                 logger.debug("Building segment from chunk.")
-                ## moet nog checken
                 
                 temp_header = self.build_segment_header(self._seqnum, 0, length=datalen)
                 check_segment = temp_header + chunk
                 checksum = self.in_cksum(check_segment)
                 
                 segment = (self.build_segment_header(self._seqnum, 0, length=datalen, checksum=checksum) + chunk)
-                
-                ##
-                #segment = (self.build_segment_header(self._seqnum, 0, length=datalen)+ chunk)
+
                 logger.info("Sending segment.")
                 self._lossy_layer.send_segment(segment)
+                
+                #self._send_packets.append({'seq': self._seqnum, 'data': segment, 'time': time.time()})                
+                self._seqnum += 1
         except queue.Empty:
             logger.info("No (more) data was available for sending right now.")
 
@@ -248,7 +258,7 @@ class BTCPClientSocket(BTCPSocket):
         We do not think you will need more advanced thread synchronization in
         this project.
         """
-        header = self.build_segment_header(self._seqnum, 0, True)
+        header = self.build_segment_header(self._seqnum, 0, True, checksum=0)
         emptyPart = b'\x00' * PAYLOAD_SIZE
         checkSegment = header + emptyPart
         checksum = self.in_cksum(checkSegment)
@@ -257,6 +267,8 @@ class BTCPClientSocket(BTCPSocket):
         syn_segment = header + emptyPart
         
         self._lossy_layer.send_segment(syn_segment)
+        self._seqnum += 1
+        
         self._state = BTCPStates.SYN_SENT
         
         while self._state != BTCPStates.ESTABLISHED:
