@@ -145,6 +145,17 @@ class BTCPSocket:
         """
         return seqnum, acknum, flag_byte, window, length, checksum
 
+    @staticmethod
+    def increment_seqnum(seqnum):
+        """method to increment the seqnum and not make it overflow
+        """
+        return (seqnum + 1) % 65536
+    
+    @staticmethod
+    def decrement_seqnum(seqnum):
+        """method to decrement the seqnum and not make it overflow
+        """
+        return (seqnum - 1) % 65536
 
 
 

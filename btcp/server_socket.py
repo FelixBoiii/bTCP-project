@@ -126,7 +126,8 @@ class BTCPServerSocket(BTCPSocket):
         
         seqnum, acknum, flag_byte, window, length, checksum = self.unpack_segment_header(segment[:HEADER_SIZE])
         chunk = segment[HEADER_SIZE:HEADER_SIZE + length]
-
+        segment_data = (seqnum, acknum, flag_byte, window, length, checksum, chunk)
+        
         if not self.verify_checksum(segment):
             logger.warning("Checksum verification failed")
             self._expire_timers()
@@ -134,15 +135,16 @@ class BTCPServerSocket(BTCPSocket):
         
         match self._state:
             case BTCPStates.ACCEPTING:
-                self._accepting_segment_received(segment, seqnum, flag_byte, chunk)
+                self._accepting_segment_received(seqnum, acknum, flag_byte, window, length, checksum, chunk)
             case BTCPStates.SYN_RCVD:
-                self._syn_rcvd_segment_received(segment, seqnum, flag_byte, chunk, acknum, length)
+                self._syn_rcvd_segment_received(seqnum, acknum, flag_byte, window, length, checksum, chunk)
             case BTCPStates.CLOSED:
-                self._closed_segment_received(segment)
+                self._closed_segment_received(seqnum, acknum, flag_byte, window, length, checksum, chunk)
             case BTCPStates.CLOSING:
-                self._closing_segment_received(segment)
+                self._closing_segment_received(seqnum, acknum, flag_byte, window, length, checksum, chunk)
             case BTCPStates.ESTABLISHED:
-                self._established_segment_received(segment, seqnum, flag_byte, length, chunk, acknum)
+                logger.debug(f"segment received in established state with acknum {acknum} and seqnum {seqnum}")
+                self._established_segment_received(seqnum, acknum, flag_byte, window, length, checksum, chunk)
             case _:
                 logger.warning(f"Unexpected state: {self._state}")
         
@@ -160,26 +162,24 @@ class BTCPServerSocket(BTCPSocket):
             
         self._lossy_layer.send_segment(synSegment)
     
-    def _accepting_segment_received(self, segment, seqnum, flag_byte, chunk):
+    def _accepting_segment_received(self, seqnum, acknum, flag_byte, window, length, checksum, chunk):
         logger.debug("_accepting_segment_received called")
-        if bool((flag_byte >> 2) & 1):
+        if (flag_byte >> 2) & 1:
             self.clientISN = seqnum
             self._client_seqnum = seqnum
 
-            self._send_empty_ack(self._seqnum, self.clientISN + 1, syn_set=True, ack_set=True)
+            self._send_empty_ack(self._seqnum, BTCPSocket.increment_seqnum(self.clientISN), syn_set=True, ack_set=True)
             
-            logger.debug("SYN-ACK sent, transitioning to SYN_RCVD state")
+            logger.debug(f"#########SYN-ACK sent, transitioning to SYN_RCVD state clientISN ={self._seqnum}")
             self._state = BTCPStates.SYN_RCVD
         else:
             logger.warning("Not a SYN segment, ignoring")
             
         
-    def _syn_rcvd_segment_received(self, segment, seqnum, flag_byte, chunk, acknum, length):
+    def _syn_rcvd_segment_received(self, seqnum, acknum, flag_byte, window, length, checksum, chunk):
         logger.debug("_syn_rcvd_segment_received called")
-    
-        ack_flag = (flag_byte >> 1) & 1
 
-        if ack_flag and acknum == self._seqnum + 1:
+        if (flag_byte >> 1) & 1 and acknum == BTCPSocket.increment_seqnum(self._seqnum):
             logger.debug("ACK received with correct sequence number")
             logger.debug("Handshake complete, transitioning to ESTABLISHED")
         
@@ -187,11 +187,11 @@ class BTCPServerSocket(BTCPSocket):
             self._client_seqnum = seqnum
         
         else:
-            logger.warning(f"Invalid ACK in SYN_RCVD: ack_flag={ack_flag}, acknum={acknum}, expected={self._seqnum + 1}")
+            logger.warning(f"Invalid ACK in SYN_RCVD: acknum={acknum}, expected={self._seqnum + 1}")
     
         
 
-    def _closed_segment_received(self, segment, flag_byte, chunk):
+    def _closed_segment_received(self, seqnum, acknum, flag_byte, window, length, checksum, chunk):
         """Helper method handling received segment in CLOSED state
         """
         logger.debug("_closed_segment_received called")
@@ -222,7 +222,7 @@ class BTCPServerSocket(BTCPSocket):
             logger.debug(chunk)
 
 
-    def _closing_segment_received(self, segment):
+    def _closing_segment_received(self, seqnum, acknum, flag_byte, window, length, checksum, chunk):
         """Helper method handling received segment in CLOSING state
 
         Currently solely for demonstration purposes.
@@ -234,7 +234,7 @@ class BTCPServerSocket(BTCPSocket):
         
 
 
-    def _established_segment_received(self, segment, seqnum, flag_byte, length, chunk, acknum):
+    def _established_segment_received(self, seqnum, acknum, flag_byte, window, length, checksum, chunk):
         """Helper method handling received segment in any other state
 
         Currently solely for demonstration purposes.
@@ -242,22 +242,31 @@ class BTCPServerSocket(BTCPSocket):
         logger.debug("_established_segment_received called")
         logger.info("Segment received in %s state",
                     self._state)
-        
+        if (flag_byte >> 2) & 1:
+            logger.debug("recieved syn flag in established state")
+            return
+        elif (flag_byte >> 1) & 1:
+            #TODO: nog implementeren
+            logger.debug("client wants to finish.")
+
+
         if seqnum < self._client_seqnum:
             logger.debug("old segment recieved")
-            self._send_empty_ack(self._seqnum, seqnum - 1, ack_set=True)
+            self._send_empty_ack(self._seqnum, BTCPSocket.decrement_seqnum(seqnum), ack_set=True)
             return
         elif seqnum == self._client_seqnum:
-            try:
-                self._recvbuf.put_nowait(chunk)
-            except queue.Full:
-                logger.critical("Data got dropped!")
-                logger.debug(chunk)
+            if length > 0:
+                try:
+                    self._recvbuf.put_nowait(chunk)
+                    self._client_seqnum = BTCPSocket.increment_seqnum(seqnum)
+                except queue.Full:
+                    logger.critical("Data got dropped!")
+                    logger.debug(chunk)
             
-            self._client_seqnum = seqnum + 1
 
             self._send_empty_ack(self._seqnum, seqnum, ack_set=True)
         else:
+            self._send_empty_ack(self._seqnum, seqnum, ack_set=True)
             logger.warning("wrong sequence number")     
 
 
@@ -299,13 +308,13 @@ class BTCPServerSocket(BTCPSocket):
             # Time in *nano*seconds, not milli- or microseconds.
             # Using a monotonic clock ensures independence of weird stuff
             # like leap seconds and timezone changes.
-            self._example_timer = time.monotonic_ns()
+            self._example_timer = time.time()
         else:
             logger.debug("Example timer already running.")
 
 
     def _expire_timers(self):
-        curtime = time.monotonic_ns()
+        curtime = time.time()
         if not self._example_timer:
             logger.debug("Example timer not running.")
         elif curtime - self._example_timer > self.timeout_nanosecs:
