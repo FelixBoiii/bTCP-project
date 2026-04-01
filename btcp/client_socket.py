@@ -202,32 +202,31 @@ class BTCPClientSocket(BTCPSocket):
         candidate to put in a helper method which can be called from either
         lossy_layer_segment_received or lossy_layer_tick.
         """
-        #logger.debug("lossy_layer_tick called")
-        #raise_NotImplementedError("Only rudimentary implementation of lossy_layer_tick present. Read the comments & code of client_socket.py, then remove the NotImplementedError.")
-
         # Actually send all chunks available for sending.
         # Relies on an eventual exception to break from the loop when no data
         # is available.
-        # You should eventually for flow cotrol  be checking whether there's space in the window as well,
-        # for reliable data transfer be storing the segments for retransmission somewhere.
         
+        #Go-back-n if timeout resends all packages not yet acklowledged 
         if self._not_ack_segments and time.time() - self._oldest_timestamp > 0.5:
-            logger.warning("go-back-n timer timeout. Resending segments")
-            for seq, segment in self._not_ack_segments:
+            logger.debug("go-back-n timer timeout. Resending segments")
+            for _, segment in self._not_ack_segments:
                 self._lossy_layer.send_segment(segment)
         
+        #sends the amount of packets that is possible in the windowsize
         try:
-            #TODO: add windowsize instead of constant 
             while len(self._not_ack_segments) < self._window:
-                logger.debug("Getting chunk from buffer.")
+                #logger.debug("Getting chunk from buffer.")
                 chunk = self._sendbuf.get_nowait()
+                
+                #BTCPSocket.create_and_send_segment(BTCPClientSocket)
+                
                 datalen = len(chunk)
-                logger.debug("Got chunk with length %i:", datalen)
-                logger.debug(chunk)
+                #logger.debug("Got chunk with length %i:", datalen)
+                #logger.debug(chunk)
                 if datalen < PAYLOAD_SIZE:
-                    logger.debug("Padding chunk to full size")
+                    #logger.debug("Padding chunk to full size")
                     chunk = chunk + b'\x00' * (PAYLOAD_SIZE - datalen)
-                logger.debug("Building segment from chunk.")
+                #logger.debug("Building segment from chunk.")
                 
                 temp_header = self.build_segment_header(self._seqnum, 0, length=datalen)
                 check_segment = temp_header + chunk

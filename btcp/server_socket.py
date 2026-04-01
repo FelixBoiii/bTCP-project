@@ -126,7 +126,7 @@ class BTCPServerSocket(BTCPSocket):
         
         seqnum, acknum, flag_byte, window, length, checksum = self.unpack_segment_header(segment[:HEADER_SIZE])
         chunk = segment[HEADER_SIZE:HEADER_SIZE + length]
-        segment_data = (seqnum, acknum, flag_byte, window, length, checksum, chunk)
+        #segment_data = (seqnum, acknum, flag_byte, window, length, checksum, chunk)
         
         if not self.verify_checksum(segment):
             logger.warning("Checksum verification failed")

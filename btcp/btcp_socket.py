@@ -1,3 +1,6 @@
+from btcp.constants import *
+
+
 import struct
 import logging
 import random
@@ -24,7 +27,7 @@ class BTCPStates(IntEnum):
     ACCEPTING   = 1
     SYN_SENT    = 2
     SYN_RCVD    = 3
-    ESTABLISHED = 4 # There's an obvious state that goes here. Give it a name.
+    ESTABLISHED = 4
     FIN_SENT    = 5
     CLOSING     = 6
     __          = 7 # If you need more states, extend the Enum like this.
@@ -67,94 +70,66 @@ class BTCPSocket:
     def timeout_nanosecs(self):
         return self._timeout_secs * 1_000_000_000
 
-
+    #calculates the checksum
     @staticmethod
     def in_cksum(segment):
-        """Compute the internet checksum of the segment given as argument.
-        Consult lecture 3 for details.
-
-        
-        Our bTCP implementation always has an even number of bytes in a segment.
-        
-        Remember that, when computing the checksum value before *sending* the
-        segment, the checksum field in the header should be set to 0x0000, and
-        then the resulting checksum should be put in its place.
-        """
-        #--------------------------hier nog even naar kijken-------------------------
         limit = 65536
         checksum = 0
+        
+        #for every two bytes it unpacks those bytes from the segment,
+        #adds them to the checksum and modulus the checksum for overflow
         for step in range(0, 1018, 2):
             word = struct.unpack("!H", segment[step:step+2])[0]
             checksum += word
             if checksum >= limit:
                  checksum = checksum % limit + 1
 
+        #creates the complement of the checksum
         checksum = ~checksum & 0xFFFF
 
         return checksum   
 
-
+    #verifies the checksum by complementing
     @staticmethod
     def verify_checksum(segment):
-        """Verify that the checksum indicates is an uncorrupted segment.
-
-        Mind that you change *what* signals that to the correct value(s),
-        that is, be sure to change the "0xABCD" below.
-        """
-        
         return BTCPSocket.in_cksum(segment) == 0x0000
 
-
+    #builds the segment header
     @staticmethod
-    def build_segment_header(seqnum, acknum,
-                             syn_set=False, ack_set=False, fin_set=False,
-                             window=0x01, length=0, checksum=0):
-        """Pack the method arguments into a valid bTCP header using struct.pack
-
-        This method is given because historically students had a lot of trouble
-        figuring out how to pack and unpack values into / out of the header.
-        We have *not* provided an implementation of the corresponding unpack
-        method (see below), so inspect the code, look at the documentation for
-        struct.pack, and figure out what this does, so you can implement the
-        unpack method yourself.
-
-        Of course, you are free to implement it differently, as long as you
-        do so correctly *and respect the network byte order*. However, you are
-        not allowed to change the SYN, ACK, and FIN flag locations in the flags
-        byte.
-
-        The method is written to have sane defaults for the arguments, so
-        you don't have to always set all flags explicitly true/false, or give
-        a checksum of 0 when creating the header for checksum computation.
-        """
-        logger.debug("build_segment_header() called")
+    def build_segment_header(seqnum, acknum, syn_set=False, ack_set=False, fin_set=False,window=0x01, length=0, checksum=0):
+        
+        #adds the flagbits in the exact locations in the flagbyte
         flag_byte = syn_set << 2 | ack_set << 1 | fin_set
-        logger.debug("build_segment_header() done")
-        return struct.pack("!HHBBHH",
-                           seqnum, acknum, flag_byte, window, length, checksum)
+        return struct.pack("!HHBBHH", seqnum, acknum, flag_byte, window, length, checksum)
 
-
+    #unpacks the segment header
     @staticmethod
     def unpack_segment_header(header):
         seqnum, acknum, flag_byte, window, length, checksum = struct.unpack("!HHBBHH", header)
-        """Unpack the individual bTCP header field values from the header.
-
-        Remember that Python supports multiple return values through automatic
-        tupling, so it's easy to simply return all of them in one go rather
-        than make a separate method for every individual field.
-        """
         return seqnum, acknum, flag_byte, window, length, checksum
+    
+    #builds the segment and sends it to lossy layer
+    def create_and_send_segment(self, seqnum, acknum=0, syn_set=False, ack_set=False, fin_set=False, window=0x01, length=0, payload=b''):
+        #padds the data to be exactly 1008 bytes
+        if len(payload) < PAYLOAD_SIZE:
+            payload = payload + b'\x00' * (PAYLOAD_SIZE - len(payload))
+        
+        #creates the segment for the checksum calculation and creates the final segment
+        checksum_segment = BTCPSocket.build_segment_header(seqnum, acknum, syn_set=syn_set, ack_set=ack_set, fin_set=fin_set,length=length, window= window) + payload
+        checksum = BTCPSocket.in_cksum(checksum_segment)
+        segment = BTCPSocket.build_segment_header(seqnum, acknum , syn_set=syn_set, ack_set=ack_set, fin_set=fin_set, checksum=checksum, length=length, window=window) + payload
+            
+        #sends the segment
+        self._lossy_layer.send_segment(segment)
 
+    #increments the sequence number without overflowing
     @staticmethod
     def increment_seqnum(seqnum):
-        """method to increment the seqnum and not make it overflow
-        """
         return (seqnum + 1) % 65536
     
+    #decrements the sequence number without overflowing
     @staticmethod
     def decrement_seqnum(seqnum):
-        """method to decrement the seqnum and not make it overflow
-        """
         return (seqnum - 1) % 65536
 
 
