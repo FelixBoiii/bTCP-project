@@ -52,7 +52,7 @@ class BTCPClientSocket(BTCPSocket):
         self._lossy_layer.start_network_thread()
         #self._handshakeQueue = queue.Queue()
         self._not_ack_segments = []
-        self._oldest_timestamp = None        
+        self._oldest_timestamp = time.time()        
         
         self._server_window = 0x01
 
@@ -139,7 +139,8 @@ class BTCPClientSocket(BTCPSocket):
             logger.warning(f"syn_sent btcpstate = established for client new ack={seqnum}")
             
             self._server_window = window
-            _ = self.create_and_send_segment(self._seqnum, BTCPSocket.increment_seqnum(seqnum), ack_set=True)
+            segment = self.create_and_send_segment(self._seqnum, BTCPSocket.increment_seqnum(seqnum), ack_set=True)
+            self._not_ack_segments.append((self._seqnum, segment))
 
             self._state = BTCPStates.ESTABLISHED
             
@@ -160,6 +161,7 @@ class BTCPClientSocket(BTCPSocket):
     def _established_segment_received(self, seqnum, acknum, flag_byte, window, length, checksum, chunk):
         logger.debug("_established_segment_received called")
         if (flag_byte >> 1) & 1:
+            self._server_window = window
             logger.debug("Recieved ack from server")
             
             #Go back n) enumerates over all not yet acknowledged packets
@@ -281,8 +283,9 @@ class BTCPClientSocket(BTCPSocket):
         this project.
         """
         
-        # send syn segment, increment sequence number and set state to syn_sent
-        _ = self.create_and_send_segment(self._seqnum, 0, syn_set=True)
+        # send syn segment, add it to the not acknoledge segments,increment sequence number and set state to syn_sent
+        segment = self.create_and_send_segment(self._seqnum, 0, syn_set=True)
+        self._not_ack_segments.append((self._seqnum, segment))
         self._seqnum = BTCPSocket.increment_seqnum(self._seqnum)
         self._state = BTCPStates.SYN_SENT
         

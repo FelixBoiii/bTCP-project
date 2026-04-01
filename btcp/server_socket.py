@@ -60,6 +60,8 @@ class BTCPServerSocket(BTCPSocket):
         # to be faster than send.
         self._recvbuf = queue.Queue(maxsize=1000)
         logger.info("Socket initialized with recvbuf size 1000")
+        #TODO add the same list of not recieved acks
+
 
         # Make sure the example timer exists from the start.
         self._example_timer = None
@@ -243,8 +245,8 @@ class BTCPServerSocket(BTCPSocket):
 
 
         if seqnum < self._client_seqnum:
-            logger.debug("old segment recieved")
-            self.create_and_send_segment(self._seqnum, BTCPSocket.decrement_seqnum(seqnum),ack_set=True)
+            logger.warning(f"old segment recieved: {BTCPSocket.decrement_seqnum(self._client_seqnum)}")
+            self.create_and_send_segment(self._seqnum, BTCPSocket.decrement_seqnum(self._client_seqnum),ack_set=True)
 
             return
         elif seqnum == self._client_seqnum:
@@ -258,9 +260,8 @@ class BTCPServerSocket(BTCPSocket):
             
             self.create_and_send_segment(self._seqnum, seqnum, ack_set=True)
         else:
-            self.create_and_send_segment(self._seqnum, seqnum, ack_set=True)
-
-            logger.warning("wrong sequence number")     
+            self.create_and_send_segment(self._seqnum, BTCPSocket.decrement_seqnum(self._client_seqnum),ack_set=True)
+            logger.warning(f"wrong sequence number got future packet sending: {BTCPSocket.decrement_seqnum(self._client_seqnum)}")     
 
 
     def lossy_layer_tick(self):
