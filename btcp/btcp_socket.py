@@ -111,8 +111,8 @@ class BTCPSocket:
     #builds the segment and sends it to lossy layer
     def create_and_send_segment(self, seqnum, acknum=0, syn_set=False, ack_set=False, fin_set=False, window=0x01, length=0, payload=b''):
         #padds the data to be exactly 1008 bytes
-        if len(payload) < PAYLOAD_SIZE:
-            payload = payload + b'\x00' * (PAYLOAD_SIZE - len(payload))
+        if length < PAYLOAD_SIZE:
+            payload = payload + b'\x00' * (PAYLOAD_SIZE - length)
         
         #creates the segment for the checksum calculation and creates the final segment
         checksum_segment = BTCPSocket.build_segment_header(seqnum, acknum, syn_set=syn_set, ack_set=ack_set, fin_set=fin_set,length=length, window= window) + payload
@@ -121,6 +121,7 @@ class BTCPSocket:
             
         #sends the segment
         self._lossy_layer.send_segment(segment)
+        return segment
 
     #increments the sequence number without overflowing
     @staticmethod

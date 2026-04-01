@@ -119,20 +119,23 @@ class BTCPServerSocket(BTCPSocket):
         """
         logger.debug("lossy_layer_segment_received called")
         logger.debug(segment)
-          
+        
+        #ignores segment if it is not the right size
         if(len(segment) != SEGMENT_SIZE):
             logger.debug("not the right length")
             return
         
+        #unpack segment and get the payload
         seqnum, acknum, flag_byte, window, length, checksum = self.unpack_segment_header(segment[:HEADER_SIZE])
         chunk = segment[HEADER_SIZE:HEADER_SIZE + length]
-        #segment_data = (seqnum, acknum, flag_byte, window, length, checksum, chunk)
         
+        #verify the checksum, if wrong ignore the segment 
         if not self.verify_checksum(segment):
             logger.warning("Checksum verification failed")
             self._expire_timers()
             return
         
+        #all states of the server socket
         match self._state:
             case BTCPStates.ACCEPTING:
                 self._accepting_segment_received(seqnum, acknum, flag_byte, window, length, checksum, chunk)
@@ -151,16 +154,6 @@ class BTCPServerSocket(BTCPSocket):
         self._expire_timers()
         return
     
-    def _send_empty_ack(self, seqnum, acknum=0, syn_set=False, ack_set=False, fin_set=False):
-        
-        checkHeader = BTCPSocket.build_segment_header(seqnum, acknum, syn_set=syn_set, ack_set=ack_set, fin_set=fin_set, window=self._window - self._recvbuf.qsize())
-        checkMessage = checkHeader + b'\x00' * PAYLOAD_SIZE
-            
-        checksum = self.in_cksum(checkMessage)
-        header = BTCPSocket.build_segment_header(seqnum, acknum , syn_set=syn_set, ack_set=ack_set, fin_set=fin_set, checksum=checksum, window=self._window - self._recvbuf.qsize())
-        synSegment = header + b'\x00' * PAYLOAD_SIZE
-            
-        self._lossy_layer.send_segment(synSegment)
     
     def _accepting_segment_received(self, seqnum, acknum, flag_byte, window, length, checksum, chunk):
         logger.debug("_accepting_segment_received called")
@@ -168,9 +161,8 @@ class BTCPServerSocket(BTCPSocket):
             self.clientISN = seqnum
             self._client_seqnum = seqnum
 
-            self._send_empty_ack(self._seqnum, BTCPSocket.increment_seqnum(self.clientISN), syn_set=True, ack_set=True)
+            self.create_and_send_segment(self._seqnum, BTCPSocket.increment_seqnum(self.clientISN), syn_set=True, ack_set=True)
             
-            logger.debug(f"#########SYN-ACK sent, transitioning to SYN_RCVD state clientISN ={self._seqnum}")
             self._state = BTCPStates.SYN_RCVD
         else:
             logger.warning("Not a SYN segment, ignoring")
@@ -252,7 +244,8 @@ class BTCPServerSocket(BTCPSocket):
 
         if seqnum < self._client_seqnum:
             logger.debug("old segment recieved")
-            self._send_empty_ack(self._seqnum, BTCPSocket.decrement_seqnum(seqnum), ack_set=True)
+            self.create_and_send_segment(self._seqnum, BTCPSocket.decrement_seqnum(seqnum),ack_set=True)
+
             return
         elif seqnum == self._client_seqnum:
             if length > 0:
@@ -263,10 +256,10 @@ class BTCPServerSocket(BTCPSocket):
                     logger.critical("Data got dropped!")
                     logger.debug(chunk)
             
-
-            self._send_empty_ack(self._seqnum, seqnum, ack_set=True)
+            self.create_and_send_segment(self._seqnum, seqnum, ack_set=True)
         else:
-            self._send_empty_ack(self._seqnum, seqnum, ack_set=True)
+            self.create_and_send_segment(self._seqnum, seqnum, ack_set=True)
+
             logger.warning("wrong sequence number")     
 
 
@@ -294,7 +287,6 @@ class BTCPServerSocket(BTCPSocket):
         logger.debug("lossy_layer_tick called")
         self._start_example_timer()
         self._expire_timers()
-        #raise_NotImplementedError("No implementation of lossy_layer_tick present. Read the comments & code of server_socket.py.")
 
 
     # The following two functions show you how you could implement a (fairly
@@ -362,8 +354,6 @@ class BTCPServerSocket(BTCPSocket):
         self._state = BTCPStates.ACCEPTING
         while self._state != BTCPStates.ESTABLISHED:
             time.sleep(0.05)
-        #logger.debug("accept called")
-        #raise_NotImplementedError("No implementation of accept present. Read the comments & code of server_socket.py.")
 
 
     def recv(self):
