@@ -64,7 +64,7 @@ class BTCPServerSocket(BTCPSocket):
 
 
         # Make sure the example timer exists from the start.
-        self._example_timer = None
+        self._server_timer = None
         self._lossy_layer.start_network_thread()
 
 
@@ -134,7 +134,6 @@ class BTCPServerSocket(BTCPSocket):
         #verify the checksum, if wrong ignore the segment 
         if not self.verify_checksum(segment):
             logger.warning("Checksum verification failed")
-            self._expire_timers()
             return
         
         #all states of the server socket
@@ -153,7 +152,7 @@ class BTCPServerSocket(BTCPSocket):
             case _:
                 logger.warning(f"Unexpected state: {self._state}")
         
-        self._expire_timers()
+        #self._expire_timers()
         return
     
     
@@ -164,7 +163,7 @@ class BTCPServerSocket(BTCPSocket):
             self._client_seqnum = seqnum
 
             self.create_and_send_segment(self._seqnum, BTCPSocket.increment_seqnum(self.clientISN), syn_set=True, ack_set=True)
-            
+            self._server_timer = time.time()
             self._state = BTCPStates.SYN_RCVD
         else:
             logger.warning("Not a SYN segment, ignoring")
@@ -179,7 +178,6 @@ class BTCPServerSocket(BTCPSocket):
         
             self._state = BTCPStates.ESTABLISHED
             self._client_seqnum = seqnum
-        
         else:
             logger.warning(f"Invalid ACK in SYN_RCVD: acknum={acknum}, expected={self._seqnum + 1}")
     
@@ -201,7 +199,7 @@ class BTCPServerSocket(BTCPSocket):
         #chunk = segment[HEADER_SIZE:HEADER_SIZE + datalen]
         # Pass data into receive buffer so that the application thread can
         # retrieve it.
-        
+        """ 
         
         try:
             self._recvbuf.put_nowait(chunk)
@@ -213,7 +211,7 @@ class BTCPServerSocket(BTCPSocket):
             # you can also just set the size limitation on the Queue
             # much higher, or remove it altogether.
             logger.critical("Data got dropped!")
-            logger.debug(chunk)
+            logger.debug(chunk) """
 
 
     def _closing_segment_received(self, seqnum, acknum, flag_byte, window, length, checksum, chunk):
@@ -222,10 +220,11 @@ class BTCPServerSocket(BTCPSocket):
         Currently solely for demonstration purposes.
         """
         logger.debug("_closing_segment_received called")
-        logger.info("Segment received in CLOSING state.")
-        logger.info("This needs to be properly implemented. "
-                    "Currently only here for demonstration purposes.")
-        
+        if (flag_byte >> 1) & 1:
+            logger.debug("ack recieved, closing")
+            self._state = BTCPStates.CLOSED
+        else:
+            self.create_and_send_segment(self._seqnum, seqnum, ack_set=True, fin_set=True)
 
 
     def _established_segment_received(self, seqnum, acknum, flag_byte, window, length, checksum, chunk):
@@ -239,9 +238,12 @@ class BTCPServerSocket(BTCPSocket):
         if (flag_byte >> 2) & 1:
             logger.debug("recieved syn flag in established state")
             return
-        elif (flag_byte >> 1) & 1:
-            #TODO: nog implementeren
+        elif flag_byte & 1:
             logger.debug("client wants to finish.")
+            self.create_and_send_segment(self._seqnum, BTCPSocket.increment_seqnum(seqnum), ack_set=True, fin_set=True)
+            _server_timer = time.time()
+            self._state = BTCPStates.CLOSING
+            return
 
 
         if seqnum < self._client_seqnum:
@@ -286,8 +288,17 @@ class BTCPServerSocket(BTCPSocket):
         lossy_layer_segment_received or lossy_layer_tick.
         """
         logger.debug("lossy_layer_tick called")
-        self._start_example_timer()
-        self._expire_timers()
+        if self._server_timer and time.time() - self._server_timer > 0.5:
+            logger.debug("timer timeout in the server")
+
+            self._server_timer = time.time()
+            if self._state == BTCPStates.SYN_RCVD:
+                logger.debug("timer timeout in the server in syn_rcvd")
+                self.create_and_send_segment(self._seqnum, BTCPSocket.increment_seqnum(self.clientISN), syn_set=True, ack_set=True)
+            elif self._state == BTCPStates.CLOSING:
+                logger.debug("timer timeout in the server in closing")
+                self.create_and_send_segment(self._seqnum, self._client_seqnum, ack_set=True, fin_set=True)
+
 
 
     # The following two functions show you how you could implement a (fairly
@@ -295,7 +306,7 @@ class BTCPServerSocket(BTCPSocket):
     # You *do* have to call _expire_timers() from *both* lossy_layer_tick
     # and lossy_layer_segment_received, for reasons explained in
     # lossy_layer_tick.
-    def _start_example_timer(self):
+    """ def _start_example_timer(self):
         if not self._example_timer:
             logger.debug("Starting example timer.")
             # Time in *nano*seconds, not milli- or microseconds.
@@ -315,7 +326,7 @@ class BTCPServerSocket(BTCPSocket):
             self._example_timer = None
         else:
             logger.debug("Example timer not yet elapsed.")
-
+ """
 
     ###########################################################################
     ### You're also building the socket API for the applications to use.    ###

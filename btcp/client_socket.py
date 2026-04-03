@@ -54,7 +54,7 @@ class BTCPClientSocket(BTCPSocket):
         self._not_ack_segments = []
         self._oldest_timestamp = time.time()        
         
-        self._server_window = 0x01
+        self._server_window = 0x50
 
         logger.info("Socket initialized with sendbuf size 1000")
 
@@ -141,7 +141,9 @@ class BTCPClientSocket(BTCPSocket):
             self._server_window = window
             segment = self.create_and_send_segment(self._seqnum, BTCPSocket.increment_seqnum(seqnum), ack_set=True)
             self._not_ack_segments.append((self._seqnum, segment))
-
+            if not self._not_ack_segments:
+                self._oldest_timestamp = time.time()
+                
             self._state = BTCPStates.ESTABLISHED
             
         else:
@@ -156,6 +158,8 @@ class BTCPClientSocket(BTCPSocket):
             self._state = BTCPStates.CLOSED
         else:
             logger.warning("Expected FIN-ACK segment, but ACK flag not set")
+            _ = self.create_and_send_segment(self._seqnum, 0, fin_set=True)
+
 
     #handles the segment in the established state
     def _established_segment_received(self, seqnum, acknum, flag_byte, window, length, checksum, chunk):
@@ -182,7 +186,8 @@ class BTCPClientSocket(BTCPSocket):
                 else:
                     self._oldest_timestamp = time.time()
             
-            
+    def _closed_segment_received(self, seqnum, acknum, flag_byte, window, length, checksum, chunk):
+        return
             
         
 
@@ -213,6 +218,14 @@ class BTCPClientSocket(BTCPSocket):
         # Actually send all chunks available for sending.
         # Relies on an eventual exception to break from the loop when no data
         # is available.
+        
+        ##tijdelijk
+        if self._not_ack_segments and self._oldest_timestamp is None:
+            self._oldest_timestamp = time.time()
+        
+        
+        ##tijdelijk
+        
         
         #Go-back-n) if timeout resends all packages not yet acklowledged 
         if self._not_ack_segments and time.time() - self._oldest_timestamp > 0.5:
@@ -361,8 +374,24 @@ class BTCPClientSocket(BTCPSocket):
         in the network thread.
         """
         logger.debug("shutdown called")
-        time.sleep(self.timeout_secs * 1.5) 
+        while not self._sendbuf.empty() or len(self._not_ack_segments) > 0:
+            time.sleep(0.05)
+        
+        self._state = BTCPStates.FIN_SENT
+        segment = self.create_and_send_segment(self._seqnum, 0, fin_set=True)
+        self._not_ack_segments.append((self._seqnum, segment))
+
+        if not self._not_ack_segments:
+            self._oldest_timestamp = time.time()
+
+        start_time = time.time()
+        while self._state != BTCPStates.CLOSED or (time.time() - start_time) < self._timeout_secs:
+            time.sleep(0.5)
+        
+        #if the max tries is met the client goes to closed mode
         self._state = BTCPStates.CLOSED
+        logger.debug("client is closed")
+
         # We're guessing the server will timeout in timeout_secs seconds,
         # and that we will have enough time in the remaining .5 * timeout_secs
         # to send anything the application layers requests.

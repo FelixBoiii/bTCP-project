@@ -57,7 +57,8 @@ class BTCPSocket:
         self._timeout_secs = timeout
         self._state = BTCPStates.CLOSED
         self._signal = BTCPSignals.NOTHING
-
+        self._max_retries = 8
+        
         if isn==None:
             isn = random.randint(0,0xffff)
         self._seqnum = isn
